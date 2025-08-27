@@ -1,0 +1,25 @@
+{
+  "name": "mcp-orchestrator-analyzers",
+  "version": "1.0.0",
+  "description": "TypeScript/JavaScript analyzers for MCP Orchestrator",
+  "main": "runtimes/ts/analyzer.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "analyze-ts": "node runtimes/ts/analyzer.js"
+  },
+  "dependencies": {
+    "ts-morph": "^21.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "code-analysis",
+    "typescript",
+    "javascript",
+    "ast"
+  ],
+  "author": "MCP Orchestrator",
+  "license": "MIT"
+}

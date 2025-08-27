@@ -1,0 +1,6 @@
+analyzer\CodeAnalyzerController$JavaCodeAnalyzer$ComplexityAnalyzer.class
+analyzer\JavaAnalyzerApplication.class
+analyzer\CodeAnalyzerController$JavaCodeAnalyzer$SideEffectDetector.class
+analyzer\CodeAnalyzerController$JavaCodeAnalyzer.class
+analyzer\CodeAnalyzerController$JavaCodeAnalyzer$MethodAnalyzerVisitor.class
+analyzer\CodeAnalyzerController.class

@@ -1,0 +1,29 @@
+{
+  "name": "mcp-orchestrator",
+  "version": "1.0.0",
+  "description": "MCP Orchestrator - Multi-Language Code Analysis System",
+  "main": "mcp_server.py",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "analyze-ts": "node runtimes/ts/analyzer.js",
+    "start-java": "cd runtimes/java && mvn spring-boot:run",
+    "start-mcp": "python mcp_server.py"
+  },
+  "dependencies": {
+    "ts-morph": "^21.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "code-analysis",
+    "typescript",
+    "javascript",
+    "python",
+    "java",
+    "ast"
+  ],
+  "author": "MCP Orchestrator",
+  "license": "MIT"
+}
