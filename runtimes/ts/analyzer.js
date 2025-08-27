@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
  * TypeScript/JavaScript AST Analyzer for MCP Orchestrator
- * Analyzes TypeScript/JavaScript code and extracts functions, inputs, outputs, complexity, branches
+ * Analyzes TypeScript/JavaScript code using built-in Node.js capabilities
+ * No external dependencies required
  */
 
-const { Project, SyntaxKind } = require('ts-morph');
+const fs = require('fs');
+const path = require('path');
 
 class TypeScriptAnalyzer {
     constructor() {
@@ -12,14 +14,14 @@ class TypeScriptAnalyzer {
         this.totalBranches = 0;
         this.complexity = 0;
         this.sideEffects = new Set();
+        this.currentFunction = null;
     }
 
     analyze(code) {
         try {
-            const project = new Project({ useInMemoryFileSystem: true });
-            const sourceFile = project.createSourceFile('temp.ts', code);
-            
-            this.visitNode(sourceFile);
+            // Simple regex-based parsing for basic function detection
+            // This is a simplified approach that works without external dependencies
+            this.parseCode(code);
             
             return {
                 functions: this.functions,
@@ -34,176 +36,230 @@ class TypeScriptAnalyzer {
         }
     }
 
-    visitNode(node) {
-        if (node.getKind() === SyntaxKind.FunctionDeclaration ||
-            node.getKind() === SyntaxKind.ArrowFunction ||
-            node.getKind() === SyntaxKind.FunctionExpression ||
-            node.getKind() === SyntaxKind.MethodDeclaration) {
-            
-            this.analyzeFunctionNode(node);
-        }
+    parseCode(code) {
+        const lines = code.split('\n');
+        let currentLineNum = 0;
+        let inFunction = false;
+        let braceCount = 0;
+        let functionStartLine = 0;
 
-        // Visit conditional statements
-        if (node.getKind() === SyntaxKind.IfStatement) {
-            this.totalBranches++;
-            this.complexity++;
-        }
+        // Patterns for different function types
+        const functionPatterns = [
+            // function declaration: function name(params) { }
+            /^\s*function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)\s*(?::\s*([^{]+))?\s*\{/,
+            // arrow function: const name = (params) => { } or const name = params => expr
+            /^\s*(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:\(([^)]*)\)|([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*=>\s*(.*)/,
+            // method: methodName(params) { } or async methodName(params) { }
+            /^\s*(?:async\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)\s*(?::\s*([^{]+))?\s*\{/,
+            // class method: public/private methodName(params) { }
+            /^\s*(?:public|private|protected|static)?\s*(?:async\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)\s*(?::\s*([^{]+))?\s*\{/
+        ];
 
-        // Visit loops
-        if (node.getKind() === SyntaxKind.ForStatement ||
-            node.getKind() === SyntaxKind.WhileStatement ||
-            node.getKind() === SyntaxKind.DoStatement ||
-            node.getKind() === SyntaxKind.ForInStatement ||
-            node.getKind() === SyntaxKind.ForOfStatement) {
-            this.totalBranches++;
-            this.complexity++;
-        }
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            currentLineNum = i + 1;
 
-        // Visit try-catch
-        if (node.getKind() === SyntaxKind.TryStatement) {
-            this.totalBranches += 2; // try + catch
-            this.complexity += 2;
-        }
+            // Skip comments and empty lines
+            if (line.trim().startsWith('//') || line.trim().startsWith('/*') || line.trim() === '') {
+                continue;
+            }
 
-        // Visit switch statements
-        if (node.getKind() === SyntaxKind.SwitchStatement) {
-            const caseCount = node.getCaseBlock().getClauses().length;
-            this.totalBranches += Math.max(1, caseCount);
-            this.complexity += Math.max(1, caseCount);
-        }
+            // Try to match function patterns
+            if (!inFunction) {
+                for (const pattern of functionPatterns) {
+                    const match = line.match(pattern);
+                    if (match) {
+                        inFunction = true;
+                        functionStartLine = currentLineNum;
+                        braceCount = 1;
+                        
+                        const funcInfo = this.extractFunctionInfo(match, currentLineNum);
+                        this.currentFunction = funcInfo;
+                        
+                        // Check if it's a single-line arrow function
+                        if (pattern.source.includes('=>') && !line.includes('{')) {
+                            // Single expression arrow function
+                            inFunction = false;
+                            funcInfo.line_end = currentLineNum;
+                            this.functions.push(funcInfo);
+                            this.totalBranches += funcInfo.branches;
+                            this.complexity += funcInfo.local_complexity;
+                            this.currentFunction = null;
+                        }
+                        break;
+                    }
+                }
+            }
 
-        // Detect side effects
-        if (node.getKind() === SyntaxKind.CallExpression) {
-            this.detectSideEffects(node);
-        }
+            if (inFunction) {
+                // Count braces to track function scope
+                const openBraces = (line.match(/\{/g) || []).length;
+                const closeBraces = (line.match(/\}/g) || []).length;
+                braceCount += openBraces - closeBraces;
 
-        // Continue visiting children
-        node.forEachChild(child => this.visitNode(child));
+                // Analyze function content
+                this.analyzeLine(line);
+
+                // Function ended
+                if (braceCount === 0) {
+                    inFunction = false;
+                    if (this.currentFunction) {
+                        this.currentFunction.line_end = currentLineNum;
+                        this.functions.push(this.currentFunction);
+                        this.totalBranches += this.currentFunction.branches;
+                        this.complexity += this.currentFunction.local_complexity;
+                        this.currentFunction = null;
+                    }
+                }
+            } else {
+                // Global scope analysis for side effects
+                this.analyzeLine(line);
+            }
+        }
     }
 
-    analyzeFunctionNode(node) {
-        const funcInfo = {
-            name: this.getFunctionName(node),
-            inputs: this.extractInputs(node),
-            outputs: this.extractOutputs(node),
-            line_start: node.getStartLineNumber(),
-            line_end: node.getEndLineNumber(),
+    extractFunctionInfo(match, lineNum) {
+        let name = 'anonymous';
+        let params = '';
+        let returnType = 'any';
+
+        if (match[1]) {
+            name = match[1];
+        }
+
+        // Extract parameters (match[2] for regular functions, match[3] for single param arrow functions)
+        if (match[2] !== undefined) {
+            params = match[2];
+        } else if (match[3] !== undefined) {
+            params = match[3];
+        }
+
+        // Extract return type if available
+        if (match[3] && match[0].includes(':')) {
+            returnType = match[3].trim();
+        }
+
+        return {
+            name: name,
+            inputs: this.parseParameters(params),
+            outputs: returnType !== 'any' ? [returnType] : ['inferred'],
+            line_start: lineNum,
+            line_end: lineNum,
             branches: 0,
             local_complexity: 1
         };
-
-        // Count branches within this function
-        const currentBranches = this.totalBranches;
-        const currentComplexity = this.complexity;
-        
-        node.forEachChild(child => this.visitNode(child));
-        
-        funcInfo.branches = this.totalBranches - currentBranches;
-        funcInfo.local_complexity = this.complexity - currentComplexity + 1;
-
-        this.functions.push(funcInfo);
     }
 
-    getFunctionName(node) {
-        if (node.getKind() === SyntaxKind.FunctionDeclaration) {
-            return node.getName() || '<anonymous>';
+    parseParameters(paramString) {
+        if (!paramString || paramString.trim() === '') {
+            return [];
         }
-        if (node.getKind() === SyntaxKind.MethodDeclaration) {
-            return node.getName();
-        }
-        if (node.getKind() === SyntaxKind.ArrowFunction || 
-            node.getKind() === SyntaxKind.FunctionExpression) {
-            // Try to get name from variable assignment
-            const parent = node.getParent();
-            if (parent && parent.getKind() === SyntaxKind.VariableDeclaration) {
-                return parent.getName();
-            }
-            return '<anonymous>';
-        }
-        return '<unknown>';
-    }
 
-    extractInputs(node) {
         const inputs = [];
-        
-        if (node.getParameters) {
-            const parameters = node.getParameters();
-            for (const param of parameters) {
-                inputs.push({
-                    name: param.getName(),
-                    type: param.getTypeNode() ? param.getTypeNode().getText() : 'any',
-                    kind: 'parameter',
-                    optional: param.hasQuestionToken()
-                });
+        const params = paramString.split(',');
+
+        for (const param of params) {
+            const trimmedParam = param.trim();
+            if (trimmedParam) {
+                // Parse parameter with optional type annotation
+                const match = trimmedParam.match(/^\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*(?::\s*([^=]+))?\s*(?:=.*)?/);
+                if (match) {
+                    inputs.push({
+                        name: match[1],
+                        type: match[2] ? match[2].trim() : 'any',
+                        kind: 'parameter',
+                        optional: trimmedParam.includes('?') || trimmedParam.includes('=')
+                    });
+                }
             }
         }
-        
+
         return inputs;
     }
 
-    extractOutputs(node) {
-        const outputs = [];
-        
-        if (node.getReturnTypeNode) {
-            const returnType = node.getReturnTypeNode();
-            if (returnType) {
-                outputs.push(returnType.getText());
+    analyzeLine(line) {
+        // Count control flow statements (branches)
+        const controlFlowPatterns = [
+            /\bif\s*\(/g,
+            /\belse\s+if\s*\(/g,
+            /\belse\b/g,
+            /\bswitch\s*\(/g,
+            /\bcase\s+/g,
+            /\bfor\s*\(/g,
+            /\bwhile\s*\(/g,
+            /\bdo\s*\{/g,
+            /\btry\s*\{/g,
+            /\bcatch\s*\(/g,
+            /\bfinally\s*\{/g,
+            /\?.*:/g // ternary operator
+        ];
+
+        for (const pattern of controlFlowPatterns) {
+            const matches = line.match(pattern);
+            if (matches) {
+                const count = matches.length;
+                if (this.currentFunction) {
+                    this.currentFunction.branches += count;
+                    this.currentFunction.local_complexity += count;
+                } else {
+                    this.totalBranches += count;
+                    this.complexity += count;
+                }
             }
         }
-        
-        if (outputs.length === 0) {
-            // Try to infer from return statements
-            const returnStatements = node.getDescendantsOfKind(SyntaxKind.ReturnStatement);
-            if (returnStatements.length > 0) {
-                outputs.push('inferred');
-            } else {
-                outputs.push('void');
-            }
-        }
-        
-        return outputs;
+
+        // Detect side effects
+        this.detectSideEffectsInLine(line);
     }
 
-    detectSideEffects(callNode) {
-        const expression = callNode.getExpression();
-        
-        if (expression.getKind() === SyntaxKind.Identifier) {
-            const funcName = expression.getText();
-            if (['console.log', 'alert', 'confirm', 'prompt'].includes(funcName)) {
-                this.sideEffects.add('io_operations');
+    detectSideEffectsInLine(line) {
+        const sideEffectPatterns = [
+            // Console operations
+            { pattern: /console\.(log|error|warn|info|debug)/g, effect: 'io_operations' },
+            // DOM operations
+            { pattern: /document\.|window\.|getElementById|querySelector/g, effect: 'dom_operations' },
+            // Network operations
+            { pattern: /fetch\s*\(|XMLHttpRequest|axios\.|\.get\(|\.post\(|\.put\(|\.delete\(/g, effect: 'network_operations' },
+            // Storage operations
+            { pattern: /localStorage|sessionStorage|indexedDB/g, effect: 'storage_operations' },
+            // File operations (Node.js)
+            { pattern: /fs\.|require\s*\(\s*['"]fs['"]|readFile|writeFile/g, effect: 'file_operations' },
+            // Timer operations
+            { pattern: /setTimeout|setInterval|requestAnimationFrame/g, effect: 'timer_operations' },
+            // Global state modification
+            { pattern: /global\.|process\.|window\.[a-zA-Z]/g, effect: 'global_state' },
+            // Async operations
+            { pattern: /\bawait\b|\.then\s*\(|\.catch\s*\(|new Promise/g, effect: 'async_operations' },
+            // Error throwing
+            { pattern: /throw\s+/g, effect: 'exception_throwing' }
+        ];
+
+        for (const { pattern, effect } of sideEffectPatterns) {
+            if (pattern.test(line)) {
+                this.sideEffects.add(effect);
             }
         }
-        
-        if (expression.getKind() === SyntaxKind.PropertyAccessExpression) {
-            const propAccess = expression;
-            const propertyName = propAccess.getName();
-            
-            if (['fetch', 'XMLHttpRequest', 'axios'].includes(propertyName) ||
-                propAccess.getText().includes('.fetch(') ||
-                propAccess.getText().includes('.post(') ||
-                propAccess.getText().includes('.get(')) {
-                this.sideEffects.add('network_operations');
-            }
-            
-            if (['localStorage', 'sessionStorage', 'indexedDB'].includes(propertyName)) {
-                this.sideEffects.add('storage_operations');
-            }
-            
-            if (propertyName === 'log' && propAccess.getExpression().getText() === 'console') {
-                this.sideEffects.add('io_operations');
-            }
+
+        // Detect imports/requires
+        if (/\bimport\b|\brequire\s*\(/g.test(line)) {
+            this.sideEffects.add('module_loading');
         }
-        
-        // Detect async operations
-        if (callNode.getParent() && callNode.getParent().getKind() === SyntaxKind.AwaitExpression) {
-            this.sideEffects.add('async_operations');
+
+        // Detect class instantiation
+        if (/\bnew\s+[A-Z]/g.test(line)) {
+            this.sideEffects.add('object_creation');
         }
     }
 
     collectAllInputs() {
         const allInputs = [];
         for (const func of this.functions) {
-            allInputs.push(...func.inputs.map(input => `${input.name}: ${input.type}`));
+            for (const input of func.inputs) {
+                const inputStr = `${input.name}: ${input.type}`;
+                if (!allInputs.includes(inputStr)) {
+                    allInputs.push(inputStr);
+                }
+            }
         }
         return allInputs;
     }
@@ -211,9 +267,13 @@ class TypeScriptAnalyzer {
     collectAllOutputs() {
         const allOutputs = [];
         for (const func of this.functions) {
-            allOutputs.push(...func.outputs);
+            for (const output of func.outputs) {
+                if (!allOutputs.includes(output)) {
+                    allOutputs.push(output);
+                }
+            }
         }
-        return allOutputs;
+        return allOutputs.length > 0 ? allOutputs : ['void'];
     }
 }
 
@@ -230,10 +290,27 @@ if (require.main === module) {
     });
     
     process.stdin.on('end', () => {
-        const analyzer = new TypeScriptAnalyzer();
-        const result = analyzer.analyze(input);
-        console.log(JSON.stringify(result, null, 2));
+        try {
+            if (!input.trim()) {
+                console.log(JSON.stringify({ error: "No code provided" }));
+                process.exit(1);
+                return;
+            }
+
+            const analyzer = new TypeScriptAnalyzer();
+            const result = analyzer.analyze(input);
+            console.log(JSON.stringify(result));
+        } catch (error) {
+            console.log(JSON.stringify({ error: `Analyzer failure: ${error.message}` }));
+            process.exit(1);
+        }
     });
+
+    // Handle timeout
+    setTimeout(() => {
+        console.log(JSON.stringify({ error: "Analysis timeout" }));
+        process.exit(1);
+    }, 10000);
 }
 
 module.exports = TypeScriptAnalyzer;
